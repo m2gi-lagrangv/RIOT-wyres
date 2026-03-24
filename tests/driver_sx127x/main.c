@@ -42,6 +42,8 @@
 
 #include "fmt.h"
 
+#include "users.h"
+#include "message.h"
 #define SX127X_LORA_MSG_QUEUE   (16U)
 #ifndef SX127X_STACKSIZE
 #define SX127X_STACKSIZE        (THREAD_STACKSIZE_DEFAULT)
@@ -51,10 +53,11 @@
 
 static char stack[SX127X_STACKSIZE];
 static kernel_pid_t _recv_pid;
-
-static char message[32];
+static chat_message_t my_mess;
+static int msg_count=0;
+//static uint32_t uid=777;
 static sx127x_t sx127x;
-
+static int listenmode; // 0 if non hex 1 otherwise
 int lora_setup_cmd(int argc, char **argv)
 {
 
@@ -242,13 +245,20 @@ int send_cmd(int argc, char **argv)
         puts("usage: send <payload>");
         return -1;
     }
+    chat_message_t msg_out;
+    strcpy(msg_out.msg,argv[1]); // WRONG TODO
+    msg_out.message_id= msg_count;
+    msg_out.uid=uid;
+    msg_out.target=0;
 
+    msg_count++;
+    
     printf("sending \"%s\" payload (%u bytes)\n",
-           argv[1], (unsigned)strlen(argv[1]) + 1);
+           argv[1], sizeof(chat_message_t));
 
     iolist_t iolist = {
-        .iol_base = argv[1],
-        .iol_len = (strlen(argv[1]) + 1)
+        .iol_base = &msg_out,
+        .iol_len = sizeof(chat_message_t)
     };
 
     netdev_t *netdev = &sx127x.netdev;
@@ -265,6 +275,14 @@ int listen_cmd(int argc, char **argv)
     (void)argc;
     (void)argv;
 
+    if (argc >1){
+        if (strcmp(argv[1],"hex")) {
+            listenmode=1; // 1 if we listen in hex mode
+        }
+    }
+    else{
+        listenmode=0; //0 OW
+    }
     netdev_t *netdev = &sx127x.netdev;
     /* Switch to continuous listen mode */
     const netopt_enable_t single = false;
@@ -454,13 +472,22 @@ int payload_cmd(int argc, char **argv)
     printf("Successfully set payload to %i\n", tmp);
     return 0;
 }
-
-
+static size_t convert_bytes_to_hex(char* dest, uint8_t* src, size_t len){
+    size_t i;
+    if(dest==NULL){
+        return -1;
+    }
+    for(i=0; i < len; i++){
+        dest += sprintf(dest, "%02x", src[i]);
+    }
+    return i;
+}
 
 static void _event_cb(netdev_t *dev, netdev_event_t event)
 {
     if (event == NETDEV_EVENT_ISR) {
         msg_t msg;
+
 
         msg.type = MSG_TYPE_ISR;
         msg.content.ptr = dev;
@@ -479,12 +506,27 @@ static void _event_cb(netdev_t *dev, netdev_event_t event)
 
         case NETDEV_EVENT_RX_COMPLETE:
             len = dev->driver->recv(dev, NULL, 0, 0);
-            dev->driver->recv(dev, message, len, &packet_info);
+            dev->driver->recv(dev, my_mess.message, len, &packet_info);
+            if (listenmode==0){
             printf(
-                "{Payload: \"%s\" (%d bytes), RSSI: %i, SNR: %i, TOA: %" PRIu32 "}\n",
-                message, (int)len,
+                "{Payload: \"%s\" (%d bytes),UID:%li, RSSI: %i, SNR: %i, TOA: %" PRIu32 "}\n",
+                my_mess.message, (int)len, my_mess.uid,
                 packet_info.rssi, (int)packet_info.snr,
                 sx127x_get_time_on_air((const sx127x_t *)dev, len));
+            }
+            else{
+                char* msg_converted = malloc(len * 2 + 1);
+                if (msg_converted != NULL) {
+                    convert_bytes_to_hex(msg_converted, (uint8_t*)my_mess.message, len);
+                    msg_converted[len * 2] = '\0';
+                    printf(
+                    "{Payload: \"%s\" (%d bytes), RSSI: %i, SNR: %i, TOA: %" PRIu32 "}\n",
+                    msg_converted, (int)len,
+                    packet_info.rssi, (int)packet_info.snr,
+                    sx127x_get_time_on_air((const sx127x_t *)dev, len));
+                    free(msg_converted);
+                }
+            }
             break;
 
         case NETDEV_EVENT_TX_COMPLETE:
@@ -526,7 +568,41 @@ void *_recv_thread(void *arg)
         }
     }
 }
+static size_t convert_hex(uint8_t *dest, const char *src) {
+    size_t i;
+    int value;
+    size_t count = strlen(src);
+    if(dest==NULL){
+        return -1;
+    }
+    for (i = 0; i < count && sscanf(src + i * 2, "%2x", &value) == 1; i++) {
+        dest[i] = value;
+    }
+    return i;
+}
 
+int sendhex_cmd(int argc, char **argv)
+{
+    if (argc < 2) {
+        puts("usage: sendhex <hexstring>");
+        puts("  e.g. sendhex deadbeef");
+        return -1;
+    }
+ 
+    uint32_t* buf=malloc(sizeof(uint32_t));
+    size_t len = convert_hex(buf, argv[1]);
+    if (len == 0) {
+        puts("[Error] sendhex: invalid or empty hex string");
+        return -1;
+    }
+ 
+    printf("sendhex: sending %u bytes: ", (unsigned)len);
+    for (size_t i = 0; i < len; i++) {
+        printf("%02x", buf[i]);
+    }
+    puts("");
+    return 0;
+}
 
 int init_sx1272_cmd(int argc, char **argv)
 {
@@ -560,7 +636,14 @@ int init_sx1272_cmd(int argc, char **argv)
         return 0;
 }
 
-
+int userlist_cmd(int argc, char **argv){
+    if (argc==1 && strcmp(argv[0],"userlist")==0){
+        puts("User list:");
+        list_users();
+        return 0;
+    }
+    return 1;
+}
 static const shell_command_t shell_commands[] = {
 	{ "init",    "Initialize SX1272",     					init_sx1272_cmd },
 	{ "setup",    "Initialize LoRa modulation settings",     lora_setup_cmd },
@@ -573,8 +656,10 @@ static const shell_command_t shell_commands[] = {
     { "channel",  "Get/Set channel frequency (in Hz)",       channel_cmd },
     { "register", "Get/Set value(s) of registers of sx127x", register_cmd },
     { "send",     "Send raw payload string",                 send_cmd },
-    { "listen",   "Start raw payload listener",              listen_cmd },
+    { "listen",   "Start raw payload listener, hex if wanna listen in hexmode",              listen_cmd },
     { "reset",    "Reset the sx127x device",                 reset_cmd },
+    {"sendhex",   "send an hex payload",                     sendhex_cmd},
+    {"userlist",  "List all users",                          userlist_cmd},
     { NULL, NULL, NULL }
 };
 
