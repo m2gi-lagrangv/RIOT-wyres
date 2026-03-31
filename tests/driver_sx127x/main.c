@@ -55,7 +55,7 @@ static char stack[SX127X_STACKSIZE];
 static kernel_pid_t _recv_pid;
 static chat_message_t my_mess;
 static int msg_count=0;
-//static uint32_t uid=777;
+static uint32_t my_uid=777;
 static sx127x_t sx127x;
 static int listenmode; // 0 if non hex 1 otherwise
 int lora_setup_cmd(int argc, char **argv)
@@ -246,9 +246,9 @@ int send_cmd(int argc, char **argv)
         return -1;
     }
     chat_message_t msg_out;
-    strcpy(msg_out.msg,argv[1]); // WRONG TODO
+    strcpy(msg_out.message,argv[1]); // WRONG TODO
     msg_out.message_id= msg_count;
-    msg_out.uid=uid;
+    msg_out.uid=my_uid;
     msg_out.target=0;
 
     msg_count++;
@@ -590,7 +590,7 @@ int sendhex_cmd(int argc, char **argv)
     }
  
     uint32_t* buf=malloc(sizeof(uint32_t));
-    size_t len = convert_hex(buf, argv[1]);
+    size_t len = convert_hex((uint8_t*)buf, argv[1]);
     if (len == 0) {
         puts("[Error] sendhex: invalid or empty hex string");
         return -1;
@@ -598,7 +598,7 @@ int sendhex_cmd(int argc, char **argv)
  
     printf("sendhex: sending %u bytes: ", (unsigned)len);
     for (size_t i = 0; i < len; i++) {
-        printf("%02x", buf[i]);
+        printf("%lx", buf[i]);
     }
     puts("");
     return 0;
