@@ -1,5 +1,5 @@
-#ifndef ___USERS__
-#define __USERS__
+#ifndef ___USERS___
+#define ___USERS___
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,4 +12,5 @@ typedef struct user {
 } user_t;
 int add_user(user_t u);
 size_t list_users(void);
+int update_user(uint32_t uid, uint32_t message_id);
 #endif
