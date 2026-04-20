@@ -1,5 +1,11 @@
 # RIOT Wyres :: RIOT OS for Wyres LoRaWAN boards
 
+## About this project 
+This project is a fork from this one: https://github.com/CampusIoT/RIOT-wyres/tree/main. It is used for the IOT UE, part LPWAN of M2 GI at UGA.\
+The work done can be find in this repository: [here](https://github.com/m2gi-lagrangv/RIOT-wyres/tree/main/tests/driver_sx127x).
+
+---
+
 [Wyres LoRaWAN boards](https://www.tindie.com/products/wyld-things/lorawan-sensor-board/) are available on Tindies.
 
 The [original firmware](https://github.com/wyres/mynewt_app_iocontrol) has been developed with [Apache MyNewT](https://mynewt.apache.org/) by [Brian Wyld](https://github.com/brianwyld)'s team.
