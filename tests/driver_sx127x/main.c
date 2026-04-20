@@ -60,10 +60,11 @@ static uint32_t my_uid = 777;
 static sx127x_t sx127x;
 static int listenmode; // 0 if non hex 1 otherwise
 
-uint32_t my_groups[MAX_GROUP];
-uint8_t group_number = 0;
-uint32_t current_group = 0;
-uint32_t current_target = 0;
+uint32_t my_groups[MAX_GROUP];  // groups the user has joined
+uint8_t group_number = 1;   // number of groups the user has joined
+uint32_t current_group = 0; // group we are currently transmitting to, 0 for broadcast
+uint32_t current_target = 0;    // user we are currently transmitting to, 0 for broadcast
+
 typedef struct {
     chat_message_t msg;
     int16_t rssi;
@@ -385,6 +386,7 @@ int syncword_cmd(int argc, char **argv)
 
     return 0;
 }
+
 int channel_cmd(int argc, char **argv)
 {
     if (argc < 2)
@@ -535,6 +537,7 @@ int payload_cmd(int argc, char **argv)
     printf("Successfully set payload to %i\n", tmp);
     return 0;
 }
+
 static size_t convert_bytes_to_hex(char *dest, uint8_t *src, size_t len)
 {
     size_t i;
@@ -548,6 +551,7 @@ static size_t convert_bytes_to_hex(char *dest, uint8_t *src, size_t len)
     }
     return i;
 }
+
 /** Push a received message into the FIFO. */
 static void fifo_push(const chat_message_t *msg, int16_t rssi, int8_t snr)
 {
@@ -559,6 +563,7 @@ static void fifo_push(const chat_message_t *msg, int16_t rssi, int8_t snr)
         fifo_count++;
     }
 }
+
 /** Return 1 if we belong to the group carried in msg, 0 otherwise. */
 static int _am_i_recipient(const chat_message_t *msg)
 {
@@ -575,6 +580,7 @@ static int _am_i_recipient(const chat_message_t *msg)
     }
     return 0;
 }
+
 /** Print one chat message in the LoRaChat text format. */
 static void _print_chat_message(const chat_message_t *msg, int16_t rssi,
                                 int8_t snr)
@@ -600,6 +606,7 @@ static void _print_chat_message(const chat_message_t *msg, int16_t rssi,
     /* Radio info */
     printf("  [RSSI:%d SNR:%d]\n", rssi, snr);
 }
+
 static void _event_cb(netdev_t *dev, netdev_event_t event)
 {
     if (event == NETDEV_EVENT_ISR)
@@ -625,46 +632,45 @@ static void _event_cb(netdev_t *dev, netdev_event_t event)
             break;
 
         case NETDEV_EVENT_RX_COMPLETE:
-              case NETDEV_EVENT_RX_COMPLETE:
-        len = dev->driver->recv(dev, NULL, 0, 0);
+            len = dev->driver->recv(dev, NULL, 0, 0);
 
-        if (len > sizeof(chat_message_t)) {
-            len = sizeof(chat_message_t);
-        }
-        dev->driver->recv(dev, &my_mess, len, &packet_info);
-
-        update_user(my_mess.uid, my_mess.message_id);
-
-        if (!_am_i_recipient(&my_mess)) {
-            break;
-        }
-
-        fifo_push(&my_mess, packet_info.rssi, packet_info.snr);
-
-        if (listenmode == 0) {
-            _print_chat_message(&my_mess, packet_info.rssi, packet_info.snr);
-        } else {
-            char hex_buf[sizeof(my_mess.message) * 2 + 1];
-            convert_bytes_to_hex(hex_buf, (uint8_t *)my_mess.message,
-                                 len - offsetof(chat_message_t, message));
-            hex_buf[sizeof(hex_buf) - 1] = '\0';
-
-            printf("%" PRIu32, my_mess.uid);
-            if (my_mess.group != 0) {
-                printf("#%" PRIu32, my_mess.group);
-            } else {
-                printf("@%s", my_mess.target_user == 0
-                               ? "*"
-                               : "");
-                if (my_mess.target_user != 0) {
-                    printf("%" PRIu32, my_mess.target_user);
-                }
+            if (len > sizeof(chat_message_t)) {
+                len = sizeof(chat_message_t);
             }
-            printf(":%" PRIu32 ":[hex]%s  [RSSI:%d SNR:%d]\n",
-                   my_mess.message_id, hex_buf,
-                   packet_info.rssi, (int)packet_info.snr);
-        }
-        break;
+            dev->driver->recv(dev, &my_mess, len, &packet_info);
+
+            update_user(my_mess.uid, my_mess.message_id);
+
+            if (!_am_i_recipient(&my_mess)) {
+                break;
+            }
+
+            fifo_push(&my_mess, packet_info.rssi, packet_info.snr);
+
+            if (listenmode == 0) {
+                _print_chat_message(&my_mess, packet_info.rssi, packet_info.snr);
+            } else {
+                char hex_buf[sizeof(my_mess.message) * 2 + 1];
+                convert_bytes_to_hex(hex_buf, (uint8_t *)my_mess.message,
+                                    len - offsetof(chat_message_t, message));
+                hex_buf[sizeof(hex_buf) - 1] = '\0';
+
+                printf("%" PRIu32, my_mess.uid);
+                if (my_mess.group != 0) {
+                    printf("#%" PRIu32, my_mess.group);
+                } else {
+                    printf("@%s", my_mess.target_user == 0
+                                ? "*"
+                                : "");
+                    if (my_mess.target_user != 0) {
+                        printf("%" PRIu32, my_mess.target_user);
+                    }
+                }
+                printf(":%" PRIu32 ":[hex]%s  [RSSI:%d SNR:%d]\n",
+                    my_mess.message_id, hex_buf,
+                    packet_info.rssi, (int)packet_info.snr);
+            }
+            break;
         case NETDEV_EVENT_TX_COMPLETE:
             sx127x_set_sleep(&sx127x);
             puts("Transmission completed");
@@ -707,6 +713,7 @@ void *_recv_thread(void *arg)
         }
     }
 }
+
 static size_t convert_hex(uint8_t *dest, const char *src)
 {
     size_t i;
@@ -808,6 +815,9 @@ int init_sx1272_cmd(int argc, char **argv)
     return 0;
 }
 
+/**
+ * 
+ */
 int userlist_cmd(int argc, char **argv)
 {
     if (argc == 1 && strcmp(argv[0], "userlist") == 0)
@@ -818,38 +828,37 @@ int userlist_cmd(int argc, char **argv)
     }
     return 1;
 }
-int group_cmd(int argc, char **argv)
-{
 
-    if (argc < 2)
-    {
-        puts("usage: group <get|set|join>");
+
+/**
+ * Allow a user to get/set/join/leave a group.
+ * If get, print the current group.
+ * If set, set the current group to the specified one. The user must have joined the group before in order to set it (otherwise, the user won't be able to send messages to that group).
+ * If join, add the specified group to the list of groups the user has joined.
+ * If leave, remove the specified group from the list of groups the user has joined. If the user leaves the current group, switch to broadcast.
+ */
+int group_cmd(int argc, char **argv) {
+    if (argc < 2) {
+        puts("usage: group <get|set|join|leave>");
         return -1;
     }
 
-    if (strcmp(argv[1], "get")==0)
-    {
+    if (strcmp(argv[1], "get")==0) {
+
         printf("group: %li\n", current_group);
         return 0;
-    }
 
-    if (strcmp(argv[1], "set") == 0)
-    {
-        if (argc < 3)
-        {
+    } else if (strcmp(argv[1], "set") == 0) {
+
+        if (argc < 3) {
             puts("usage: group set <group>");
             return -1;
-        }
-        else
-        {
+        } else {
             uint32_t target_group = (uint32_t)atoi(argv[2]);
 
-            for (int i = 0; i < group_number; i++)
-            {
-                printf("for loop du set: %i\n", i);
-                
-                if (my_groups[i] == target_group) 
-                {
+            for (int i = 0; i < group_number; i++) {
+                //printf("for loop du set: %i\n", i);
+                if (my_groups[i] == target_group) {
                     current_group = target_group;
                     printf("successfully transmitting to group %li \n", current_group);
                     return 0;
@@ -860,91 +869,136 @@ int group_cmd(int argc, char **argv)
             puts("you must join a group before transmitting to it (group join <group>)");
             return -1;
         }
-    }
-    if (strcmp(argv[1], "join")==0)
-    {
-        if (argc < 3)
-        {
+
+    } else if (strcmp(argv[1], "join")==0) {
+
+        if (argc < 3) {
             puts("usage: group join <group>");
             return -1;
-        }
-        else
-        {
-            if (group_number < MAX_GROUP)
-            {
+        } else {
+            if (group_number < MAX_GROUP) {
                 my_groups[group_number] = (uint32_t) atoi(argv[2]);
                 group_number++;
+                puts("Group joined successfully");
+                return 0;
+            } else {
+                puts("max group reached, cannot join more groups");
+                return -1;
             }
         }
-    }
-    else{if (strcmp(argv[1], "leave") == 0) {
-    if (argc < 3) {
-        puts("usage: group leave <group>");
+
+    } else if (strcmp(argv[1], "leave") == 0) {
+
+        if (argc < 3) {
+            puts("usage: group leave <group>");
+            return -1;
+        }
+
+        if (group_number == 0) {
+            puts("you haven't joined any group yet, thus you cannot leave any group");
+            return -1;
+        }
+
+        if (group_number == 0) {
+            puts("group 0 is the broadcast group, you cannot leave it");
+            return -1;
+        }
+
+        uint32_t g = (uint32_t)atoi(argv[2]);
+        for (int i = 0; i < group_number; i++) {
+            if (my_groups[i] == g) {
+                for (int j = i; j < group_number - 1; j++) {
+                    my_groups[j] = my_groups[j + 1];
+                }
+                group_number--;
+                if (current_group == g) {
+                    current_group = 0;
+                    puts("Left current group, switched to broadcast");
+                }
+                printf("Left group %" PRIu32 "\n", g);
+                return 0;
+            }
+        }
+
+        puts("Not a member of that group");
         return -1;
-    }
-    uint32_t g = (uint32_t)atoi(argv[2]);
-    for (int i = 0; i < group_number; i++) {
-        if (my_groups[i] == g) {
-            for (int j = i; j < group_number - 1; j++) {
-                my_groups[j] = my_groups[j + 1];
-            }
-            group_number--;
-            if (current_group == g) {
-                current_group = 0;
-                puts("Left current group, switched to broadcast");
-            }
-            printf("Left group %" PRIu32 "\n", g);
-            return 0;
-        }
-    }
-    puts("Not a member of that group");
-    return -1;
-}else{
-    {
+
+    } else {
         puts("usage: group <get|set|join>");
         return -1;
     }
-
-    return 0;}}
 }
-int target_cmd(int argc, char **argv)
-{
 
-    if (argc < 2)
-    {
+
+/**
+ * Allow a user to get/set the target user for unicast messages. 
+ * If get, print the current target (0 by default, meaning everyone).
+ * If set, set the current target to the specified one and 0 if the target user is not known.
+ */
+int target_cmd(int argc, char **argv) {
+    if (argc < 2) {
         puts("usage: target <get|set>");
         return -1;
     }
 
-    if (strcmp(argv[1], "get")==0)
-    {
+    if (strcmp(argv[1], "get")==0) {
+
         printf("target: %li\n", current_target);
+        return 0;
+
+    } else if (strcmp(argv[1], "set")==0) {
+
+        if (argc < 3){
+            puts("usage: target set <target>");
+            return -1;
+        } else {
+            if (is_known_user((uint32_t)atoi(argv[2]))) {
+                current_target = (uint32_t)atoi(argv[2]);
+                printf("successfully transmitting to target %li \n", current_target);
+            } else {
+                current_target = 0;
+                puts("target user not known, switched to broadcast");
+            }
+            return 0;
+        }
+
+    } else {
+        puts("usage: target <get|set>");
+        return -1;
+    }
+
+}
+
+
+int msglist_cmd(int argc, char **argv) {
+    if (fifo_count == 0) {
+        puts("no message received yet");
         return 0;
     }
 
-    if (strcmp(argv[1], "set")==0)
-    {
-        if (argc < 3)
-        {
-            puts("usage: target set <target>");
-            return -1;
+    if (argc == 1 && strcmp(argv[0], "msglist") == 0) {
+        printf("Last %i received messages:\n", fifo_count);
+        int index = (fifo_head - fifo_count + MSG_FIFO_SIZE) % MSG_FIFO_SIZE;
+        for (int i = 0; i < fifo_count; i++) {
+            rx_entry_t *entry = &msg_fifo[(index + i) % MSG_FIFO_SIZE];
+            _print_chat_message(&entry->msg, entry->rssi, entry->snr);
         }
-        else
-        {
-                    current_target = (uint32_t)atoi(argv[2]);
-
-                    printf("successfully transmitting to target %li \n", current_target);
-                    return 0;
-        }
+        return 0;
     }
-    else
-    {
-        puts("usage: target <get|set>");
-        return -1;
-    }
-
-    return 0;
+    return -1;
 }
+
+/**
+ * Display our own UID.
+ */
+int uid_cmd(int argc, char **argv) {
+    if (argc == 1 && strcmp(argv[0], "uid") == 0) {
+        printf("uid: %li\n", my_uid);
+        return 0;
+    } 
+    return -1;
+}
+
 static const shell_command_t shell_commands[] = {
     {"init", "Initialize SX1272", init_sx1272_cmd},
     {"setup", "Initialize LoRa modulation settings", lora_setup_cmd},
@@ -963,10 +1017,31 @@ static const shell_command_t shell_commands[] = {
     {"userlist", "List all users", userlist_cmd},
     {"group", "Get/Set/Join/leave group", group_cmd},
     {"target", "Get/Set target", target_cmd},
-    { "msglist", "List last received messages (FIFO)", msglist_cmd },
-{ "uid",     "Show or set our own UID",            uid_cmd     },
+    {"msglist", "List last received messages (FIFO)", msglist_cmd },
+    {"uid",     "Show or set our own UID",            uid_cmd     },
     {NULL, NULL, NULL}
 };
+
+
+/**
+ * Test function to push some messages into the FIFO for testing the msglist command.
+ * To be called in main before starting the shell.
+ */
+void test_msglist(void) {
+    // Clear the FIFO
+    fifo_head = 0;
+    fifo_count = 0;
+
+    // Push some messages into the FIFO
+    fifo_push(&(chat_message_t){.uid=123, .message_id=0, .group=0, .target_user=0, .message="Hello world!"}, -42, 10);
+    update_user(123, 0);
+
+    fifo_push(&(chat_message_t){.uid=456, .message_id=1, .group=1, .target_user=0, .message="Hi there!"}, -40, 12);
+    update_user(456, 1);
+
+    fifo_push(&(chat_message_t){.uid=789, .message_id=2, .group=0, .target_user=my_uid, .message="Hey!"}, -45, 8);
+    update_user(789, 2);
+}
 
 int main(void)
 {
@@ -976,6 +1051,8 @@ int main(void)
     /* start the shell */
     puts("Initialization successful - starting the shell now");
     char line_buf[SHELL_DEFAULT_BUFSIZE];
+
+    test_msglist();
 
     shell_run(shell_commands, line_buf, SHELL_DEFAULT_BUFSIZE);
 

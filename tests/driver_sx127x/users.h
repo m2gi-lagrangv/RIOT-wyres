@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <inttypes.h>
 
 typedef struct user {
@@ -13,4 +14,5 @@ typedef struct user {
 int add_user(user_t u);
 size_t list_users(void);
 int update_user(uint32_t uid, uint32_t message_id);
+bool is_known_user(uint32_t uid);
 #endif

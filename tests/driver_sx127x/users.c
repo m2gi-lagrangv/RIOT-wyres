@@ -48,8 +48,20 @@ size_t list_users(void)
     }
     return count;
 }
+
 int update_user(uint32_t uid, uint32_t message_id)
 {
     user_t u = { .user_id = uid, .message_id = message_id, .next = NULL };
     return add_user(u);
+}
+
+bool is_known_user(uint32_t uid) {
+    user_t *users = all_users;
+    while (users != NULL) {
+        if (users->user_id == uid) {
+            return true;
+        }
+        users = users->next;
+    }
+    return false;
 }
