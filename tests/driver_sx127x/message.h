@@ -9,6 +9,7 @@ typedef struct {
     uint32_t message_id;
     uint32_t group;
     uint32_t target_user;
+    uint8_t ttl;
     char message[32];
 } chat_message_t;
 #endif

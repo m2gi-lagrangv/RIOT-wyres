@@ -41,7 +41,7 @@
 #include "sx127x_netdev.h"
 
 #include "fmt.h"
-
+#include "ztimer.h"
 #include "users.h"
 #include "message.h"
 #define SX127X_LORA_MSG_QUEUE (16U)
@@ -49,6 +49,7 @@
 #define SX127X_STACKSIZE (THREAD_STACKSIZE_DEFAULT)
 #endif
 
+#define CRC_FIFO_SIZE 32
 #define MSG_FIFO_SIZE 16
 #define MSG_TYPE_ISR (0x3456)
 #define MAX_GROUP 32
@@ -74,6 +75,39 @@ typedef struct {
 static rx_entry_t  msg_fifo[MSG_FIFO_SIZE];
 static int         fifo_head  = 0;
 static int         fifo_count = 0;
+static uint32_t hash_fifo[CRC_FIFO_SIZE];
+
+static int      hash_fifo_idx = 0;
+/* Hash djb2 sur le message, excluant le ttl */
+static uint32_t _msg_hash(const chat_message_t *m) {
+    uint32_t h = 5381;
+    const uint8_t *p = (const uint8_t *)m;
+    /* Hache tout jusqu'à ttl */
+    for (size_t i = 0; i < offsetof(chat_message_t, ttl); i++) {
+        h = ((h << 5) + h) ^ p[i];
+    }
+    /* Puis le payload */
+    for (size_t i = 0; i < strlen(m->message); i++) {
+        h = ((h << 5) + h) ^ (uint8_t)m->message[i];
+    }
+    return h;
+}
+
+
+static int crc_already_seen(const chat_message_t *m) {
+    uint32_t h = _msg_hash(m);
+    for (int i = 0; i < CRC_FIFO_SIZE; i++) {
+        if (hash_fifo[i] == h) return 1;
+    }
+    return 0;
+}
+
+static void crc_mark_seen(const chat_message_t *m) {
+    hash_fifo[hash_fifo_idx] = _msg_hash(m);
+    hash_fifo_idx = (hash_fifo_idx + 1) % CRC_FIFO_SIZE;
+}
+
+
 int lora_setup_cmd(int argc, char **argv)
 {
 
@@ -606,7 +640,10 @@ static void _print_chat_message(const chat_message_t *msg, int16_t rssi,
     /* Radio info */
     printf("  [RSSI:%d SNR:%d]\n", rssi, snr);
 }
-
+/*
+/ Event handler : handles reception, check if we are desired destination, otherwise discard the message
+/ Add the message to the FIFO queue a nd display
+*/
 static void _event_cb(netdev_t *dev, netdev_event_t event)
 {
     if (event == NETDEV_EVENT_ISR)
@@ -641,12 +678,27 @@ static void _event_cb(netdev_t *dev, netdev_event_t event)
 
             update_user(my_mess.uid, my_mess.message_id);
 
-            if (!_am_i_recipient(&my_mess)) {
+            if (!_am_i_recipient(&my_mess) ) {
                 break;
             }
 
             fifo_push(&my_mess, packet_info.rssi, packet_info.snr);
+            if (my_mess.ttl > 0 && !crc_already_seen(&my_mess)) {
+                crc_mark_seen(&my_mess);
+                my_mess.ttl--;
 
+                /* RelayDelay : plus le SNR est fort, plus on attend */
+                uint32_t delay_ms = (packet_info.snr > 0)
+                                    ? (uint32_t)(packet_info.snr * 50)
+                                    : 0;
+                ztimer_sleep(ZTIMER_MSEC, delay_ms);
+                iolist_t relay = {
+                    .iol_base = &my_mess,
+                    .iol_len  = sizeof(chat_message_t)
+                };
+                netdev_t *netdev = &sx127x.netdev;
+                netdev->driver->send(netdev, &relay);
+            }
             if (listenmode == 0) {
                 _print_chat_message(&my_mess, packet_info.rssi, packet_info.snr);
             } else {
@@ -714,6 +766,7 @@ void *_recv_thread(void *arg)
     }
 }
 
+// convert an ASCII message to hexadecimal format
 static size_t convert_hex(uint8_t *dest, const char *src)
 {
     size_t i;
@@ -969,7 +1022,10 @@ int target_cmd(int argc, char **argv) {
 
 }
 
-
+/*
+/ list all previously received messages
+/ 
+*/
 int msglist_cmd(int argc, char **argv) {
     if (fifo_count == 0) {
         puts("no message received yet");
