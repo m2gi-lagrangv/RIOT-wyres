@@ -5,10 +5,10 @@
 #include <stdlib.h>
 #include <inttypes.h>
 typedef struct {
-    uint32_t uid;
+    char uid[4];
     uint32_t message_id;
-    uint32_t group;
-    uint32_t target_user;
+    char group[4];
+    char target_user[4];
     uint8_t ttl;
     char message[32];
 } chat_message_t;

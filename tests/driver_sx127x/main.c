@@ -57,14 +57,14 @@ static char stack[SX127X_STACKSIZE];
 static kernel_pid_t _recv_pid;
 static chat_message_t my_mess;
 static int msg_count = 0;
-static uint32_t my_uid = 777;
+static char my_uid[5] = "777";
 static sx127x_t sx127x;
 static int listenmode; // 0 if non hex 1 otherwise
 
-uint32_t my_groups[MAX_GROUP];  // groups the user has joined
+char my_groups[MAX_GROUP][5];  // groups the user has joined
 uint8_t group_number = 1;   // number of groups the user has joined
-uint32_t current_group = 0; // group we are currently transmitting to, 0 for broadcast
-uint32_t current_target = 0;    // user we are currently transmitting to, 0 for broadcast
+char current_group[5] = "0"; // group we are currently transmitting to, 0 for broadcast
+char current_target[5] = "0";    // user we are currently transmitting to, 0 for broadcast
 
 typedef struct {
     chat_message_t msg;
@@ -327,10 +327,10 @@ int send_cmd(int argc, char **argv)
     chat_message_t msg_out;
     memset(&msg_out, 0, sizeof(msg_out));
     strncpy(msg_out.message, argv[1], sizeof(msg_out.message) - 1);
-    msg_out.uid         = my_uid;
+    strcpy(msg_out.uid, my_uid);
     msg_out.message_id  = (uint32_t)msg_count++;
-    msg_out.group       = current_group;
-    msg_out.target_user = current_target;
+    strcpy(msg_out.group, current_group);
+    strcpy(msg_out.target_user, current_target);
 
     iolist_t iolist = {
         .iol_base = &msg_out,
@@ -601,36 +601,35 @@ static void fifo_push(const chat_message_t *msg, int16_t rssi, int8_t snr)
 /** Return 1 if we belong to the group carried in msg, 0 otherwise. */
 static int _am_i_recipient(const chat_message_t *msg)
 {
-    if (msg->group != 0) {
+    if (msg->group[0] != '\0') {
         for (int i = 0; i < group_number; i++) {
-            if (my_groups[i] == msg->group) {
+            if (strcmp(my_groups[i], msg->group) == 0) {
                 return 1;
             }
         }
         return 0;
     }
-    if (msg->target_user == 0 || msg->target_user == my_uid) {
+    if (msg->target_user[0] == '\0' || strcmp(msg->target_user, my_uid) == 0 || strcmp(msg->target_user,"0")==0) {
         return 1;
     }
     return 0;
 }
-
 /** Print one chat message in the LoRaChat text format. */
 static void _print_chat_message(const chat_message_t *msg, int16_t rssi,
                                 int8_t snr)
 {
     /* Sender */
-    printf("%" PRIu32, msg->uid);
+    printf("%s", msg->uid);
 
     /* Destination */
-    if (msg->group != 0) {
-        printf("#%" PRIu32, msg->group);
+    if (msg->group[0] != '\0') {
+        printf("#%s", msg->group);
     } else {
         printf("@");
-        if (msg->target_user == 0) {
+        if (msg->target_user[0] == '\0') {
             printf("*");
         } else {
-            printf("%" PRIu32, msg->target_user);
+            printf("%s", msg->target_user);
         }
     }
 
@@ -670,14 +669,69 @@ static void _event_cb(netdev_t *dev, netdev_event_t event)
 
         case NETDEV_EVENT_RX_COMPLETE:
             len = dev->driver->recv(dev, NULL, 0, 0);
+           //printf("DEBUG len=%d expected=%d\n", (int)len, (int)sizeof(chat_message_t));
 
-            if (len > sizeof(chat_message_t)) {
-                len = sizeof(chat_message_t);
+       if (len >= sizeof(chat_message_t)) {
+        /* Format struct complet */
+        dev->driver->recv(dev, &my_mess, sizeof(chat_message_t), &packet_info);
+        my_mess.uid[3] = '\0';
+        my_mess.group[3] = '\0';
+        my_mess.target_user[3] = '\0';
+        my_mess.message[31] = '\0';
+} else {
+    memset(&my_mess, 0, sizeof(my_mess));
+    char raw[32];
+    dev->driver->recv(dev, raw, len, &packet_info);
+    
+    raw[len < 31 ? len : 31] = '\0';
+
+    /* Essaie de parser le format  uid@cible:id:message  ou  uid#group:id:message */
+    char *at = strpbrk(raw, "@#");
+    char *colon1 = at ? strchr(at, ':') : NULL;
+    char *colon2 = colon1 ? strchr(colon1 + 1, ':') : NULL;
+
+    if (at && colon1 && colon2) {
+        /* uid */
+        size_t uid_len = at - raw;
+        strncpy(my_mess.uid, raw, uid_len < 4 ? uid_len : 3);
+        my_mess.uid[3] = '\0';
+
+        /* group ou target */
+        if (*at == '#') {
+            size_t g_len = colon1 - at - 1;
+            strncpy(my_mess.group, at + 1, g_len < 4 ? g_len : 3);
+            my_mess.group[3] = '\0';
+        } else {
+            size_t t_len = colon1 - at - 1;
+            char target[4] = {0};
+            strncpy(target, at + 1, t_len < 4 ? t_len : 3);
+            if (target[0] == '*') {
+                strcpy(my_mess.target_user, "0");
+            } else {
+                strncpy(my_mess.target_user, target, 3);
+                my_mess.target_user[3] = '\0';
             }
-            dev->driver->recv(dev, &my_mess, len, &packet_info);
+        }
 
+        /* message_id */
+        my_mess.message_id = (uint32_t)atoi(colon1 + 1);
+
+        /* message */
+        strncpy(my_mess.message, colon2 + 1, 31);
+        my_mess.message[31] = '\0';
+    } else {
+        /* pas de format reconnu, affiche brut */
+        strcpy(my_mess.uid, "???");
+        strcpy(my_mess.group, "0");
+        strcpy(my_mess.target_user, "0");
+        strncpy(my_mess.message, raw, 31);
+        my_mess.message[31] = '\0';
+    }
+    my_mess.ttl = 0;
+}
             update_user(my_mess.uid, my_mess.message_id);
-
+            //printf("DEBUG uid='%s' group='%s' target='%s' msg='%s'\n",
+            my_mess.uid, my_mess.group, my_mess.target_user, my_mess.message);
             if (!_am_i_recipient(&my_mess) ) {
                 break;
             }
@@ -686,12 +740,12 @@ static void _event_cb(netdev_t *dev, netdev_event_t event)
             if (my_mess.ttl > 0 && !crc_already_seen(&my_mess)) {
                 crc_mark_seen(&my_mess);
                 my_mess.ttl--;
-
+               
                 /* RelayDelay : plus le SNR est fort, plus on attend */
-                uint32_t delay_ms = (packet_info.snr > 0)
-                                    ? (uint32_t)(packet_info.snr * 50)
-                                    : 0;
-                ztimer_sleep(ZTIMER_MSEC, delay_ms);
+                //uint32_t delay_ms = (packet_info.snr > 0)
+                //                    ? (uint32_t)(packet_info.snr * 50)
+                 //                   : 0;
+                //ztimer_sleep(ZTIMER_MSEC, delay_ms);
                 iolist_t relay = {
                     .iol_base = &my_mess,
                     .iol_len  = sizeof(chat_message_t)
@@ -699,6 +753,10 @@ static void _event_cb(netdev_t *dev, netdev_event_t event)
                 netdev_t *netdev = &sx127x.netdev;
                 netdev->driver->send(netdev, &relay);
             }
+             if (packet_info.rssi <-130){
+                        puts("[warn] RSSI trop faible, bruit ignoré");
+                        break;
+                }
             if (listenmode == 0) {
                 _print_chat_message(&my_mess, packet_info.rssi, packet_info.snr);
             } else {
@@ -707,15 +765,15 @@ static void _event_cb(netdev_t *dev, netdev_event_t event)
                                     len - offsetof(chat_message_t, message));
                 hex_buf[sizeof(hex_buf) - 1] = '\0';
 
-                printf("%" PRIu32, my_mess.uid);
-                if (my_mess.group != 0) {
-                    printf("#%" PRIu32, my_mess.group);
+                printf("%s", my_mess.uid);
+                if (my_mess.group[0] != '\0') {
+                    printf("#%s", my_mess.group);
                 } else {
-                    printf("@%s", my_mess.target_user == 0
-                                ? "*"
-                                : "");
-                    if (my_mess.target_user != 0) {
-                        printf("%" PRIu32, my_mess.target_user);
+                    printf("@");
+                    if (my_mess.target_user[0] == '\0') {
+                        printf("*");
+                    } else {
+                        printf("%s", my_mess.target_user);
                     }
                 }
                 printf(":%" PRIu32 ":[hex]%s  [RSSI:%d SNR:%d]\n",
@@ -725,7 +783,13 @@ static void _event_cb(netdev_t *dev, netdev_event_t event)
             break;
         case NETDEV_EVENT_TX_COMPLETE:
             sx127x_set_sleep(&sx127x);
+            
             puts("Transmission completed");
+                if (listenmode >= 0) {
+        netopt_state_t state = NETOPT_STATE_RX;
+        dev->driver->set(dev, NETOPT_STATE, &state, sizeof(state));
+    }
+    break;
             break;
 
         case NETDEV_EVENT_CAD_DONE:
@@ -816,9 +880,9 @@ int sendhex_cmd(int argc, char **argv)
     }
 
     msg_out.message_id = msg_count;
-    msg_out.uid = my_uid;
-    msg_out.group = current_group;
-    msg_out.target_user = current_target;
+    strcpy(msg_out.uid, my_uid);
+    strcpy(msg_out.group, current_group);
+    strcpy(msg_out.target_user, current_target);
     msg_count++;
     iolist_t iolist = {
         .iol_base = &msg_out,
@@ -898,7 +962,7 @@ int group_cmd(int argc, char **argv) {
 
     if (strcmp(argv[1], "get")==0) {
 
-        printf("group: %li\n", current_group);
+        printf("Current group: %s\n", current_group);
         return 0;
 
     } else if (strcmp(argv[1], "set") == 0) {
@@ -907,19 +971,15 @@ int group_cmd(int argc, char **argv) {
             puts("usage: group set <group>");
             return -1;
         } else {
-            uint32_t target_group = (uint32_t)atoi(argv[2]);
-
             for (int i = 0; i < group_number; i++) {
-                //printf("for loop du set: %i\n", i);
-                if (my_groups[i] == target_group) {
-                    current_group = target_group;
-                    printf("successfully transmitting to group %li \n", current_group);
+                if (strcmp(my_groups[i], argv[2]) == 0) {
+                    strcpy(current_group, argv[2]);
+                    printf("Successfully transmitting to group %s\n", current_group);
                     return 0;
                 }
             }
             
-            printf("%li\n", target_group); 
-            puts("you must join a group before transmitting to it (group join <group>)");
+            puts("You must join a group before transmitting to it (group join <group>)");
             return -1;
         }
 
@@ -930,12 +990,12 @@ int group_cmd(int argc, char **argv) {
             return -1;
         } else {
             if (group_number < MAX_GROUP) {
-                my_groups[group_number] = (uint32_t) atoi(argv[2]);
+                strcpy(my_groups[group_number], argv[2]);
                 group_number++;
                 puts("Group joined successfully");
                 return 0;
             } else {
-                puts("max group reached, cannot join more groups");
+                puts("Max group reached, cannot join more groups");
                 return -1;
             }
         }
@@ -948,27 +1008,21 @@ int group_cmd(int argc, char **argv) {
         }
 
         if (group_number == 0) {
-            puts("you haven't joined any group yet, thus you cannot leave any group");
+            puts("You haven't joined any group yet, thus you cannot leave any group");
             return -1;
         }
 
-        if (group_number == 0) {
-            puts("group 0 is the broadcast group, you cannot leave it");
-            return -1;
-        }
-
-        uint32_t g = (uint32_t)atoi(argv[2]);
         for (int i = 0; i < group_number; i++) {
-            if (my_groups[i] == g) {
+            if (strcmp(my_groups[i], argv[2]) == 0) {
                 for (int j = i; j < group_number - 1; j++) {
-                    my_groups[j] = my_groups[j + 1];
+                    strcpy(my_groups[j], my_groups[j + 1]);
                 }
                 group_number--;
-                if (current_group == g) {
-                    current_group = 0;
+                if (strcmp(current_group, argv[2]) == 0) {
+                    strcpy(current_group, "0");
                     puts("Left current group, switched to broadcast");
                 }
-                printf("Left group %" PRIu32 "\n", g);
+                printf("Left group %s\n", argv[2]);
                 return 0;
             }
         }
@@ -977,7 +1031,7 @@ int group_cmd(int argc, char **argv) {
         return -1;
 
     } else {
-        puts("usage: group <get|set|join>");
+        puts("usage: group <get|set|join|leave>");
         return -1;
     }
 }
@@ -996,7 +1050,7 @@ int target_cmd(int argc, char **argv) {
 
     if (strcmp(argv[1], "get")==0) {
 
-        printf("target: %li\n", current_target);
+        printf("Current target: %s\n", current_target);
         return 0;
 
     } else if (strcmp(argv[1], "set")==0) {
@@ -1005,12 +1059,12 @@ int target_cmd(int argc, char **argv) {
             puts("usage: target set <target>");
             return -1;
         } else {
-            if (is_known_user((uint32_t)atoi(argv[2]))) {
-                current_target = (uint32_t)atoi(argv[2]);
-                printf("successfully transmitting to target %li \n", current_target);
+            if (is_known_user(argv[2])) {
+                strcpy(current_target, argv[2]);
+                printf("Successfully transmitting to target %s\n", current_target);
             } else {
-                current_target = 0;
-                puts("target user not known, switched to broadcast");
+                strcpy(current_target, "0");
+                puts("Target user not known, switched to broadcast");
             }
             return 0;
         }
@@ -1049,7 +1103,7 @@ int msglist_cmd(int argc, char **argv) {
  */
 int uid_cmd(int argc, char **argv) {
     if (argc == 1 && strcmp(argv[0], "uid") == 0) {
-        printf("uid: %li\n", my_uid);
+        printf("My UID: %s\n", my_uid);
         return 0;
     } 
     return -1;
@@ -1089,18 +1143,41 @@ void test_msglist(void) {
     fifo_count = 0;
 
     // Push some messages into the FIFO
-    fifo_push(&(chat_message_t){.uid=123, .message_id=0, .group=0, .target_user=0, .message="Hello world!"}, -42, 10);
-    update_user(123, 0);
+    chat_message_t msg1;
+    memset(&msg1, 0, sizeof(msg1));
+    strcpy(msg1.uid, "123");
+    msg1.message_id = 0;
+    strcpy(msg1.group, "0");
+    strcpy(msg1.target_user, "0");
+    strcpy(msg1.message, "Hello world!");
+    fifo_push(&msg1, -42, 10);
+    update_user("123", 0);
 
-    fifo_push(&(chat_message_t){.uid=456, .message_id=1, .group=1, .target_user=0, .message="Hi there!"}, -40, 12);
-    update_user(456, 1);
+    chat_message_t msg2;
+    memset(&msg2, 0, sizeof(msg2));
+    strcpy(msg2.uid, "456");
+    msg2.message_id = 1;
+    strcpy(msg2.group, "1");
+    strcpy(msg2.target_user, "0");
+    strcpy(msg2.message, "Hi there!");
+    fifo_push(&msg2, -40, 12);
+    update_user("456", 1);
 
-    fifo_push(&(chat_message_t){.uid=789, .message_id=2, .group=0, .target_user=my_uid, .message="Hey!"}, -45, 8);
-    update_user(789, 2);
+    chat_message_t msg3;
+    memset(&msg3, 0, sizeof(msg3));
+    strcpy(msg3.uid, "789");
+    msg3.message_id = 2;
+    strcpy(msg3.group, "0");
+    strcpy(msg3.target_user, my_uid);
+    strcpy(msg3.message, "Hey!");
+    fifo_push(&msg3, -45, 8);
+    update_user("789", 2);
 }
 
 int main(void)
 {
+
+    strcpy(my_groups[0], "0");
 
     // init_sx1272_cmd(0,NULL);
 
